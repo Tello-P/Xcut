@@ -1,15 +1,75 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <errno.h>
-
 
 // Global variables to store the clipboard text and its length.
 char *clipboard_text = NULL;
 size_t text_length = 0;
 
+// Daemonize function to detach from the terminal and run in the background
+void daemonize() {
+    pid_t pid, sid;
+
+    /* 1. Fork the parent process */
+    pid = fork();
+    if (pid < 0) {
+        perror("First fork failed");
+        exit(EXIT_FAILURE);
+    }
+    if (pid > 0) {
+        /* Parent process exits */
+        exit(EXIT_SUCCESS);
+    }
+
+    /* 2. Create a new session to detach from the terminal */
+    sid = setsid();
+    if (sid < 0) {
+        perror("setsid failed");
+        exit(EXIT_FAILURE);
+    }
+
+    /* 3. Fork again to ensure the daemon cannot acquire a controlling terminal */
+    pid = fork();
+    if (pid < 0) {
+        perror("Second fork failed");
+        exit(EXIT_FAILURE);
+    }
+    if (pid > 0) {
+        /* First child exits */
+        exit(EXIT_SUCCESS);
+    }
+
+    /* 4. Change the current working directory to root */
+    if (chdir("/") < 0) {
+        perror("chdir failed");
+        exit(EXIT_FAILURE);
+    }
+
+    /* 5. Reset the file mode mask */
+    umask(0);
+
+    /* 6. Close standard file descriptors */
+    close(STDIN_FILENO);
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+
+    /* Optionally, you can redirect these descriptors to /dev/null */
+    /* int fd = open("/dev/null", O_RDWR);
+       if (fd != -1) {
+           dup2(fd, STDIN_FILENO);
+           dup2(fd, STDOUT_FILENO);
+           dup2(fd, STDERR_FILENO);
+           if (fd > 2) close(fd);
+       }
+    */
+}
 
 /*
  * Function: my_strdup
@@ -60,35 +120,25 @@ char *my_strdup(const char *s)
  *   or UTF8_STRING format. This function responds with the stored text.
  */
 void handle_selection_request(Display *display, XEvent *event) {
-    // Cast the generic event to a selection request event.
     XSelectionRequestEvent *req = &event->xselectionrequest;
     XEvent response;
-    // Zero out the response structure to avoid garbage values.
     memset(&response, 0, sizeof(response));
 
-    // Set up the response event fields.
-    response.xselection.type      = SelectionNotify;  // Notify event type.
-    response.xselection.display   = req->display;       // Use the same display.
-    response.xselection.requestor = req->requestor;     // The window requesting the selection.
-    response.xselection.selection = req->selection;     // The clipboard selection.
-    response.xselection.target    = req->target;        // Requested data format.
-    response.xselection.time      = req->time;          // Timestamp from the request.
-    // By default, we use the property specified by the requestor.
+    response.xselection.type      = SelectionNotify;
+    response.xselection.display   = req->display;
+    response.xselection.requestor = req->requestor;
+    response.xselection.selection = req->selection;
+    response.xselection.target    = req->target;
+    response.xselection.time      = req->time;
     response.xselection.property  = req->property;
 
-    // Define an atom for UTF8_STRING.
     Atom utf8_string = XInternAtom(display, "UTF8_STRING", False);
 
-    // Check the requested target format.
     if (req->target == XA_STRING || req->target == utf8_string) {
-        // If the target is a string format (ASCII or UTF-8),
-        // transfer the clipboard text to the requested property.
         XChangeProperty(display, req->requestor, req->property,
                         req->target, 8, PropModeReplace,
                         (unsigned char*)clipboard_text, text_length);
     } else if (req->target == XInternAtom(display, "TARGETS", False)) {
-        // If the request is for the list of supported formats,
-        // provide an array containing XA_STRING, UTF8_STRING, and TARGETS.
         Atom targets[3];
         int count = 0;
         targets[count++] = XA_STRING;
@@ -98,42 +148,36 @@ void handle_selection_request(Display *display, XEvent *event) {
                         XA_ATOM, 32, PropModeReplace,
                         (unsigned char*)targets, count);
     } else {
-        // If the requested target is not supported, set property to None.
         response.xselection.property = None;
     }
 
-    // Send the response event to the requestor.
     XSendEvent(display, req->requestor, 0, 0, &response);
     XFlush(display);
 }
 
-int main(int argc,char *argv[])
-{
+int main(int argc, char *argv[]) {
     errno = 0;
     FILE *fp = NULL;
 
-    // Check if a file was provided as an argument
-    if (argc > 1)
-    {
+    if (argc > 1) {
         fp = fopen(argv[1], "r");
-        if (!fp)
-	{
+        if (!fp) {
             perror("Error opening file");
             exit(EXIT_FAILURE);
         }
-    } else
-    {
-	errno = 2;
-	perror("ERROR:");
-	exit(EXIT_FAILURE);
+    } else {
+        errno = 2;
+        perror("ERROR: No file provided");
+        exit(EXIT_FAILURE);
     }
 
-    // 1. Text to copy to the clipboard.
+    // Convert process to daemon
+    daemonize();
+
     fseek(fp, 0, SEEK_END);
     text_length = ftell(fp);
     rewind(fp);
 
-    // Allocate memory for the text
     clipboard_text = malloc(text_length + 1);
     if (!clipboard_text) {
         perror("Memory allocation failed");
@@ -141,33 +185,26 @@ int main(int argc,char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    // Read the file content
     fread(clipboard_text, 1, text_length, fp);
-    clipboard_text[text_length] = '\0'; // Null-terminate the string
+    clipboard_text[text_length] = '\0';
     fclose(fp);
 
-    
-    // Determine the length of the text (including the newline, if present).
     text_length = strlen(clipboard_text);
 
-    // 2. Connect to the X server.
-    Display *display = XOpenDisplay(NULL); // NULL uses the DISPLAY environment variable.
+    Display *display = XOpenDisplay(NULL);
     if (display == NULL) {
         fprintf(stderr, "Unable to open display.\n");
         free(clipboard_text);
         exit(EXIT_FAILURE);
     }
-    int screen = DefaultScreen(display); // Get the default screen number.
+    int screen = DefaultScreen(display);
 
-    // 3. Create an invisible window to act as the clipboard owner.
     Window window = XCreateSimpleWindow(display, RootWindow(display, screen),
                                         0, 0, 1, 1, 0,
                                         BlackPixel(display, screen),
                                         WhitePixel(display, screen));
-    // Select events that we are interested in (e.g., property change events).
     XSelectInput(display, window, PropertyChangeMask);
 
-    // 4. Set the window as the owner of the CLIPBOARD selection.
     Atom clipboard_atom = XInternAtom(display, "CLIPBOARD", False);
     XSetSelectionOwner(display, clipboard_atom, window, CurrentTime);
     if (XGetSelectionOwner(display, clipboard_atom) != window) {
@@ -181,30 +218,24 @@ int main(int argc,char *argv[])
     printf("The program will remain running to maintain the clipboard content.\n");
     printf("Press Ctrl+C to exit.\n");
 
-    // 5. Event loop to handle selection requests.
     XEvent event;
     while (1) {
         XNextEvent(display, &event);
         switch (event.type) {
             case SelectionRequest:
-                // When a SelectionRequest event is received, handle it.
                 handle_selection_request(display, &event);
                 break;
             case SelectionClear:
-                // When the clipboard ownership is lost, notify the user.
                 printf("Clipboard ownership lost.\n");
                 goto cleanup;
             default:
-                // Other events are ignored.
                 break;
         }
     }
 
 cleanup:
-    // 6. Clean up resources before exiting.
-    free(clipboard_text);            // Free the allocated clipboard text.
-    XDestroyWindow(display, window); // Destroy the window.
-    XCloseDisplay(display);          // Close the connection to the X server.
+    free(clipboard_text);
+    XDestroyWindow(display, window);
+    XCloseDisplay(display);
     return 0;
 }
-
