@@ -3,7 +3,7 @@
 #include <string.h>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
-
+#include <errno.h>
 
 
 // Global variables to store the clipboard text and its length.
@@ -109,6 +109,7 @@ void handle_selection_request(Display *display, XEvent *event) {
 
 int main(int argc,char *argv[])
 {
+    errno = 0;
     FILE *fp = NULL;
 
     // Check if a file was provided as an argument
@@ -122,27 +123,12 @@ int main(int argc,char *argv[])
         }
     } else
     {
-        fp = stdin;
+	errno = 2;
+	perror("ERROR:");
+	exit(EXIT_FAILURE);
     }
 
-    // 1. Prompt the user to enter the text to copy to the clipboard.
-    //printf("Enter the text to copy to the clipboard:\n");
-
-    /*
-     * Instead of using getline (which is not available in all compilers),
-     * we use fgets with a fixed-size buffer.
-     *
-     * Example:
-     *   If the user types "Hello, World!\n", fgets will capture that line 
-     *   (up to 1023 characters) and store it in the buffer.
-     */
-    /*
-    char buffer[1024];
-    if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
-        perror("Error reading text");
-        exit(EXIT_FAILURE);
-    }
-    */
+    // 1. Text to copy to the clipboard.
     fseek(fp, 0, SEEK_END);
     text_length = ftell(fp);
     rewind(fp);
@@ -160,12 +146,7 @@ int main(int argc,char *argv[])
     clipboard_text[text_length] = '\0'; // Null-terminate the string
     fclose(fp);
 
-    // Duplicate the buffer to allocate just enough memory for the clipboard text.
-    /*clipboard_text = my_strdup(buffer);
-    if (clipboard_text == NULL) {
-        perror("Error allocating memory for clipboard text");
-        exit(EXIT_FAILURE);
-    }*/
+    
     // Determine the length of the text (including the newline, if present).
     text_length = strlen(clipboard_text);
 
