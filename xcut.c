@@ -107,9 +107,26 @@ void handle_selection_request(Display *display, XEvent *event) {
     XFlush(display);
 }
 
-int main(void) {
+int main(int argc,char *argv[])
+{
+    FILE *fp = NULL;
+
+    // Check if a file was provided as an argument
+    if (argc > 1)
+    {
+        fp = fopen(argv[1], "r");
+        if (!fp)
+	{
+            perror("Error opening file");
+            exit(EXIT_FAILURE);
+        }
+    } else
+    {
+        fp = stdin;
+    }
+
     // 1. Prompt the user to enter the text to copy to the clipboard.
-    printf("Enter the text to copy to the clipboard:\n");
+    //printf("Enter the text to copy to the clipboard:\n");
 
     /*
      * Instead of using getline (which is not available in all compilers),
@@ -119,17 +136,36 @@ int main(void) {
      *   If the user types "Hello, World!\n", fgets will capture that line 
      *   (up to 1023 characters) and store it in the buffer.
      */
+    /*
     char buffer[1024];
     if (fgets(buffer, sizeof(buffer), stdin) == NULL) {
         perror("Error reading text");
         exit(EXIT_FAILURE);
     }
+    */
+    fseek(fp, 0, SEEK_END);
+    text_length = ftell(fp);
+    rewind(fp);
+
+    // Allocate memory for the text
+    clipboard_text = malloc(text_length + 1);
+    if (!clipboard_text) {
+        perror("Memory allocation failed");
+        fclose(fp);
+        exit(EXIT_FAILURE);
+    }
+
+    // Read the file content
+    fread(clipboard_text, 1, text_length, fp);
+    clipboard_text[text_length] = '\0'; // Null-terminate the string
+    fclose(fp);
+
     // Duplicate the buffer to allocate just enough memory for the clipboard text.
-    clipboard_text = my_strdup(buffer);
+    /*clipboard_text = my_strdup(buffer);
     if (clipboard_text == NULL) {
         perror("Error allocating memory for clipboard text");
         exit(EXIT_FAILURE);
-    }
+    }*/
     // Determine the length of the text (including the newline, if present).
     text_length = strlen(clipboard_text);
 
