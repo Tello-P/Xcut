@@ -9,58 +9,58 @@
 #include <X11/Xatom.h>
 #include <errno.h>
 
-// Global variables to store the clipboard text and its length.
+// Globals for clipboard stuff
 char *clipboard_text = NULL;
 size_t text_length = 0;
 
-// Daemonize function to detach from the terminal and run in the background
+// Turns everything into a daemon so user dont knows
 void daemonize() {
 	pid_t pid, sid;
 
-	/* 1. Fork the parent process */
+	/* First fork: spawn a kid and let the parent die */
 	pid = fork();
 	if (pid < 0) {
 		perror("First fork failed");
 		exit(EXIT_FAILURE);
 	}
 	if (pid > 0) {
-		/* Parent process exits */
+		/* Parent’s gone */
 		exit(EXIT_SUCCESS);
 	}
 
-	/* 2. Create a new session to detach from the terminal */
+	/* New session time—cuts ties with the terminal */
 	sid = setsid();
 	if (sid < 0) {
 		perror("setsid failed");
 		exit(EXIT_FAILURE);
 	}
 
-	/* 3. Fork again to ensure the daemon cannot acquire a controlling terminal */
+	/* Second fork: because one wasn’t enough, keeps it from grabbing a terminal */
 	pid = fork();
 	if (pid < 0) {
 		perror("Second fork failed");
 		exit(EXIT_FAILURE);
 	}
 	if (pid > 0) {
-		/* First child exits */
+		/* First kid’s done its job*/
 		exit(EXIT_SUCCESS);
 	}
 
-	/* 4. Change the current working directory to root */
+	/* Move to root dir to not disturbe the peace */
 	if (chdir("/") < 0) {
 		perror("chdir failed");
 		exit(EXIT_FAILURE);
 	}
 
-	/* 5. Reset the file mode mask */
+	/* Reset file permissions*/
 	umask(0);
 
-	/* 6. Close standard file descriptors */
+	/* Standard I/O doors shut */
 	close(STDIN_FILENO);
 	close(STDOUT_FILENO);
 	close(STDERR_FILENO);
 
-	/* Optionally, you can redirect these descriptors to /dev/null */
+	/* Could send stuff to /dev/null, but its working now uncomment if you wish */
 	/* int fd = open("/dev/null", O_RDWR);
 	   if (fd != -1) {
 	   dup2(fd, STDIN_FILENO);
@@ -71,30 +71,15 @@ void daemonize() {
 	   */
 }
 
-/*
- * Function: my_strdup
- * -------------------
- * Creates a duplicate of the given string by allocating memory
- * and copying the content of the original string.
- *
- * Parameters:
- *   s - Pointer to the null-terminated string to duplicate.
- *
- * Returns:
- *   A pointer to the newly allocated duplicate of the string,
- *   or NULL if memory allocation fails.
- *
- * Example:
- *   char *original = "Hello, World!";
- *   char *copy = my_strdup(original);
- *   if (copy != NULL) {
- *       // Use the duplicated string...
- *       free(copy); // Don't forget to free the allocated memory.
- *   }
+/* 
+ * my_strdup: DIY string copier since strdup isn’t always around
+ * Takes a string, makes a fresh copy, hands it back
+ * Give it a string, get a duplicate or NULL if malloc hates you
+ * Example: char *s = "something"; char *c = my_strdup(s);
  */
 char *my_strdup(const char *s)
 {
-	size_t len = strlen(s) + 1;  // +1 for the terminating null byte.
+	size_t len = strlen(s) + 1;  // Yes that null byte too
 	char *copy = malloc(len);
 	if (copy != NULL)
 	{
@@ -104,20 +89,10 @@ char *my_strdup(const char *s)
 }
 
 /*
- * Function: handle_selection_request
- * ------------------------------------
- * Handles selection requests from other applications.
- * When another application requests the clipboard content,
- * this function sends the text stored in 'clipboard_text'.
- *
- * Parameters:
- *   display - connection to the X server.
- *   event   - pointer to the X event that contains the selection request.
- *
- * Example:
- *   Suppose an application issues a paste command. It sends a 
- *   SelectionRequest event asking for the content in either XA_STRING
- *   or UTF8_STRING format. This function responds with the stored text.
+ * handle_selection_request: Deals with apps asking for clipboard goodies
+ * When someone wants the text, this shoves it their way
+ * Needs the X display and the event details to work
+ * If you paste somewhere, this catches the request and delivers
  */
 void handle_selection_request(Display *display, XEvent *event) {
 	XSelectionRequestEvent *req = &event->xselectionrequest;
@@ -159,6 +134,7 @@ int main(int argc, char *argv[]) {
 	errno = 0;
 	FILE *fp = NULL;
 
+	// Just as usual
 	if (argc > 1) {
 		fp = fopen(argv[1], "r");
 		if (!fp) {
@@ -171,13 +147,15 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-	// Convert process to daemon
+	// Daemon now
 	daemonize();
 
+	// Figure out how big the file is
 	fseek(fp, 0, SEEK_END);
 	text_length = ftell(fp);
 	rewind(fp);
 
+	// Grab some memory for the text (malloc) :)
 	clipboard_text = malloc(text_length + 1);
 	if (!clipboard_text) {
 		perror("Memory allocation failed");
@@ -185,12 +163,16 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
+	// Get the file contents
 	fread(clipboard_text, 1, text_length, fp);
-	clipboard_text[text_length] = '\0';
+	clipboard_text[text_length] = '\0';	// So ist a finished text
 	fclose(fp);
 
-	text_length = strlen(clipboard_text);
-
+	text_length = strlen(clipboard_text); // Double-check the length
+	
+	/*
+	 * X11
+	 */
 	Display *display = XOpenDisplay(NULL);
 	if (display == NULL) {
 		fprintf(stderr, "Unable to open display.\n");
@@ -199,12 +181,14 @@ int main(int argc, char *argv[]) {
 	}
 	int screen = DefaultScreen(display);
 
+	// Make a tiny window for X11 shenanigans (later will go out)
 	Window window = XCreateSimpleWindow(display, RootWindow(display, screen),
 			0, 0, 1, 1, 0,
 			BlackPixel(display, screen),
 			WhitePixel(display, screen));
 	XSelectInput(display, window, PropertyChangeMask);
 
+	// Claim the clipboard
 	Atom clipboard_atom = XInternAtom(display, "CLIPBOARD", False);
 	XSetSelectionOwner(display, clipboard_atom, window, CurrentTime);
 	if (XGetSelectionOwner(display, clipboard_atom) != window) {
@@ -214,10 +198,12 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
+	// Let the user know (though they might not see this as a daemon, but you never know)
 	printf("Text has been copied to the clipboard.\n");
 	printf("The program will remain running to maintain the clipboard content.\n");
 	printf("Press Ctrl+C to exit.\n");
 
+	// Event loop, wait for clipboard action
 	XEvent event;
 	while (1) {
 		XNextEvent(display, &event);
@@ -227,15 +213,17 @@ int main(int argc, char *argv[]) {
 				break;
 			case SelectionClear:
 				printf("Clipboard ownership lost.\n");
-				goto cleanup;
+				goto cleanup; // Exit if someone else takes over
 			default:
 				break;
 		}
 	}
 
 cleanup:
+	// Clean everything and close
 	free(clipboard_text);
 	XDestroyWindow(display, window);
 	XCloseDisplay(display);
 	return 0;
 }
+
